@@ -1,0 +1,13 @@
+**/*.rs.bk
+.#*
+.gdb_history
+Cargo.lock
+target/
+examples/
+__pycache__/
+gerber/
+_autosave-*
+*.kicad_pcb-bak
+*.net
+*.bak
+*.bck
