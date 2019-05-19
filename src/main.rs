@@ -46,6 +46,7 @@ fn main() -> ! {
                        .pclk2(MegaHertz(32));
     let clocks = rcc.cfgr.freeze(&mut flash.acr);
     let mut gpioa = peri.GPIOA.split(&mut rcc.ahb);
+    let gpiob = peri.GPIOB.split(&mut rcc.ahb);
     let pa2 = gpioa.pa2.into_af7(&mut gpioa.moder, &mut gpioa.afrl);
     let pa3 = gpioa.pa3.into_af7(&mut gpioa.moder, &mut gpioa.afrl);
     let mut pa5 = gpioa.pa5.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
@@ -81,12 +82,25 @@ fn main() -> ! {
     let mut results = unsafe { Q.split().1 };
     let mut toggle = false;
 
+    let disp_mode = gpiob.pb7.is_high();
+    if disp_mode {
+        let _ = core::write!(out, "\x1b\x1b\x02\x40\x00");             // clear to black
+        let _ = core::write!(out, "\x1b\x1b\x03\x30\x30\x30");         // set position
+        let _ = core::write!(out, "\x1b\x1b\x02\x31\x02");             // set font
+        let _ = core::write!(out, "\x1b\x1b\x05\x33\x00\x08\x07\x0f"); // set colors
+        let _ = core::write!(out, "\x1b\x1b\x01\x20");                 // switch to gfx mode
+    }
+
     loop {
         cortex_m::asm::wfi(); // let systick fire, no busy-wait
         if let Some(freq) = results.dequeue() {
             toggle = !toggle;
             if toggle { pa5.set_high(); } else { pa5.set_low(); }
-            core::write!(out, "\r{:7} Hz", freq).unwrap();
+            if disp_mode {
+                core::write!(out, "\x1b\x1b\x0b\x44{:7} Hz", freq).unwrap();
+            } else {
+                core::write!(out, "\r{:7} Hz", freq).unwrap();
+            }
         }
     }
 }
