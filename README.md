@@ -1,5 +1,12 @@
 ## Frequency counter on a STM32F303
 
+Uses PA0 as the input pin, which triggers counting on TIM2.
+
+Writes output to USART2 on pins PA2/PA3, which are connected
+to the USB-ACM port if using a Nucleo board.
+
+The user-LED on PA5 toggles every second to show operation.
+
 ### Build
 
 Using nightly Rust and cargo, just do a `cargo build --release`.

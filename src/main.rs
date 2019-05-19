@@ -1,32 +1,40 @@
-#![allow(unused_unsafe)]
 #![no_main]
 #![no_std]
+#![allow(deprecated)]
 
 extern crate panic_semihosting;
 
+use core::fmt::{self, Write};
 use stm32f3::stm32f303 as stm;
-use stm32f3::stm32f303::{interrupt, Interrupt};
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::ExceptionFrame;
-use cortex_m_semihosting as sh;
 use stm32f3xx_hal::prelude::*;
-use stm32f3xx_hal::time::MegaHertz;
-use core::sync::atomic::AtomicU32;
-use core::sync::atomic::Ordering;
+use stm32f3xx_hal::time::{Bps, MegaHertz};
+use stm32f3xx_hal::serial::Serial;
+use heapless::consts::U4;
+use heapless::spsc;
 
 #[macro_use]
 mod util;
 
-static FREQ: AtomicU32 = AtomicU32::new(0);
-static FREQ_SCRATCH: AtomicU32 = AtomicU32::new(0);
-static SYSTICK_MS: AtomicU32 = AtomicU32::new(0);
-const ORD: Ordering = Ordering::SeqCst;
+static mut Q: spsc::Queue<u32, U4, u8> = spsc::Queue::u8();
+
+struct Writer<P>(Serial<stm::USART2, P>);
+
+impl<P> fmt::Write for Writer<P> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for &b in s.as_bytes() {
+            write!(USART2.tdr: tdr = b as u16);
+            wait_for!(USART2.isr: txe);
+        }
+        Ok(())
+    }
+}
 
 #[cortex_m_rt::entry]
-unsafe fn main() -> ! {
+fn main() -> ! {
     let pcore = cortex_m::Peripherals::take().unwrap();
-    let peri = stm32f3::stm32f303::Peripherals::take().unwrap();
-    let mut nvic = pcore.NVIC;
+    let peri = stm::Peripherals::take().unwrap();
     let mut syst = pcore.SYST;
 
     // set up system clock to max value reachable by HSI
@@ -36,18 +44,23 @@ unsafe fn main() -> ! {
                        .hclk(MegaHertz(64))
                        .pclk1(MegaHertz(32))
                        .pclk2(MegaHertz(32));
-    rcc.cfgr.freeze(&mut flash.acr);
+    let clocks = rcc.cfgr.freeze(&mut flash.acr);
+    let mut gpioa = peri.GPIOA.split(&mut rcc.ahb);
+    let pa2 = gpioa.pa2.into_af7(&mut gpioa.moder, &mut gpioa.afrl);
+    let pa3 = gpioa.pa3.into_af7(&mut gpioa.moder, &mut gpioa.afrl);
+    let mut pa5 = gpioa.pa5.into_push_pull_output(&mut gpioa.moder, &mut gpioa.otyper);
+    let mut out = Writer(Serial::usart2(peri.USART2, (pa2, pa3), Bps(115200),
+                                        clocks, &mut rcc.apb1));
 
     syst.set_clock_source(SystClkSource::Core);
-    syst.set_reload(6400000-1);
+    syst.set_reload(16_000_000-1);  // every 0.25s
     syst.enable_interrupt();
 
-    // set up GPIO
-    modif!(RCC.ahbenr: iopaen = true);
+    // set up external timer input (XXX can't do this with the hal crate)
     modif!(GPIOA.moder: moder0 = 0b10);
     modif!(GPIOA.afrl: afrl0 = 1);
 
-    // set up TIM2 for counting pulses
+    // set up TIM2 for counting pulses (can't do it with hal either)
     modif!(RCC.apb1enr: tim2en = true);
     pulse!(RCC.apb1rstr: tim2rst);
 
@@ -59,45 +72,35 @@ unsafe fn main() -> ! {
            etps = 0b00,  // no prescaler
            ts = 0b111    // external trigger input
     );
+
     modif!(TIM2.cr1: urs = true);
-
-    nvic.enable(Interrupt::TIM2);
     modif!(TIM2.cr1: cen = true);
-    // modif!(TIM2.dier: cc1ie = true);
 
-    FREQ_SCRATCH.store(0, ORD);
-
-    let mut last_disp = 0;
     syst.clear_current();
     syst.enable_counter();
+    let mut results = unsafe { Q.split().1 };
+    let mut toggle = false;
+
     loop {
-        let cur = SYSTICK_MS.load(ORD);
-        if cur > last_disp + 10 {
-            sh::hprintln!("{} {}", FREQ.load(ORD), readb!(GPIOA.idr: idr0));
-            last_disp = cur;
+        cortex_m::asm::wfi(); // let systick fire, no busy-wait
+        if let Some(freq) = results.dequeue() {
+            toggle = !toggle;
+            if toggle { pa5.set_high(); } else { pa5.set_low(); }
+            core::write!(out, "\r{:7} Hz", freq).unwrap();
         }
     }
 }
 
-#[interrupt]
-unsafe fn TIM2() {
-    if readb!(TIM2.sr: cc1if) {
-        FREQ_SCRATCH.fetch_add(65536, ORD);
-        modif!(TIM2.sr: cc1if = false);
-    }
-}
-
 #[cortex_m_rt::exception]
+#[allow(non_upper_case_globals, unused_unsafe)]
 unsafe fn SysTick() -> ! {
-    SYSTICK_MS.fetch_add(1, ORD);
-
-    FREQ.store(FREQ_SCRATCH.load(ORD) + read!(TIM2.cnt: cnt), ORD);
-
-    // TODO apply prescaler
-    // reset counter
-    write!(TIM2.cnt: cnt = 1);
-    write!(TIM2.cnt: cnt = 0);
-    FREQ_SCRATCH.store(0, ORD);
+    static mut n: u32 = 0;
+    *n += 1;
+    if *n == 4 {
+        let _ = Q.split().0.enqueue(read!(TIM2.cnt: cnt));
+        write!(TIM2.cnt: cnt = 0);
+        *n = 0;
+    }
 }
 
 #[cortex_m_rt::exception]
