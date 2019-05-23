@@ -6,7 +6,7 @@ import serial
 def update():
     res = port.read_until('z')
     if res:
-        label.setText(res.strip())
+        label.setText('%d rpm' % (float(res.strip().decode()[:-2].strip()) * 60))
 
 port = serial.Serial('/dev/ttyACM0', baudrate=115200, timeout=0.1)
 port.flushInput()
