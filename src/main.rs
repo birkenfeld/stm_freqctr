@@ -24,7 +24,7 @@ struct Writer<P>(Serial<stm::USART2, P>);
 impl<P> fmt::Write for Writer<P> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for &b in s.as_bytes() {
-            write!(USART2.tdr: tdr = b as u16);
+            write!(USART2.tdr: tdr = (b as u16));
             wait_for!(USART2.isr: txe);
         }
         Ok(())
@@ -58,8 +58,8 @@ fn main() -> ! {
     syst.enable_interrupt();
 
     // set up external timer input (XXX can't do this with the hal crate)
-    modif!(GPIOA.moder: moder0 = 0b10);
-    modif!(GPIOA.afrl: afrl0 = 1);
+    modif!(GPIOA.moder: moder15 = alternate);
+    modif!(GPIOA.afrh: afrh15 = af1);
 
     // set up TIM2 for counting pulses (can't do it with hal either)
     modif!(RCC.apb1enr: tim2en = true);
@@ -74,8 +74,8 @@ fn main() -> ! {
            ts = 0b111    // external trigger input
     );
 
-    modif!(TIM2.cr1: urs = true);
-    modif!(TIM2.cr1: cen = true);
+    modif!(TIM2.cr1: urs = counter_only);
+    modif!(TIM2.cr1: cen = enabled);
 
     syst.clear_current();
     syst.enable_counter();
