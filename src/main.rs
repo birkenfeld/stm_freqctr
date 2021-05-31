@@ -5,19 +5,18 @@
 extern crate panic_semihosting;
 
 use core::fmt::{self, Write};
-use stm32f3::stm32f303 as stm;
+use stm32f3xx_hal::pac as stm;
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::ExceptionFrame;
 use stm32f3xx_hal::prelude::*;
 use stm32f3xx_hal::time::{Bps, MegaHertz};
 use stm32f3xx_hal::serial::Serial;
-use heapless::consts::U4;
 use heapless::spsc;
 
 #[macro_use]
 mod util;
 
-static mut Q: spsc::Queue<u32, U4, u8> = spsc::Queue::u8();
+static mut Q: spsc::Queue<u32, 4> = spsc::Queue::new();
 
 struct Writer<P>(Serial<stm::USART2, P>);
 
@@ -82,7 +81,7 @@ fn main() -> ! {
     let mut results = unsafe { Q.split().1 };
     let mut toggle = false;
 
-    let disp_mode = gpiob.pb7.is_high();
+    let disp_mode = gpiob.pb7.is_high().unwrap();
     if disp_mode {
         let _ = core::write!(out, "\x1b\x1b\x02\x40\x00");             // clear to black
         let _ = core::write!(out, "\x1b\x1b\x03\x30\x30\x30");         // set position
@@ -95,7 +94,7 @@ fn main() -> ! {
         cortex_m::asm::wfi(); // let systick fire, no busy-wait
         if let Some(freq) = results.dequeue() {
             toggle = !toggle;
-            if toggle { pa5.set_high(); } else { pa5.set_low(); }
+            if toggle { pa5.set_high() } else { pa5.set_low() }.unwrap();
             if disp_mode {
                 core::write!(out, "\x1b\x1b\x0b\x44{:7} Hz", freq).unwrap();
             } else {
@@ -106,8 +105,9 @@ fn main() -> ! {
 }
 
 #[cortex_m_rt::exception]
-#[allow(non_upper_case_globals, unused_unsafe)]
-unsafe fn SysTick() -> ! {
+#[allow(unused_unsafe)]
+unsafe fn SysTick() {
+    #[allow(non_upper_case_globals)]
     static mut n: u32 = 0;
     *n += 1;
     if *n == 4 {
